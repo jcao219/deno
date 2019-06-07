@@ -57,6 +57,7 @@ export { readlinkSync, readlink } from "./read_link";
 export { statSync, lstatSync, stat, lstat } from "./stat";
 export { linkSync, link } from "./link";
 export { symlinkSync, symlink } from "./symlink";
+export { watch, FsWatcher, FsWatchEvent } from "./watch_fs";
 export { writeFileSync, writeFile, WriteFileOptions } from "./write_file";
 export { ErrorKind, DenoError } from "./errors";
 export {

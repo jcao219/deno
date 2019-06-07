@@ -31,6 +31,7 @@ main_extern_rlib = [
   "hyper_rustls",
   "indexmap",
   "lazy_static",
+  "notify",
   "libc",
   "log",
   "rand",

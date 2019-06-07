@@ -18,6 +18,9 @@ union Any {
   FetchModuleMetaData,
   FetchModuleMetaDataRes,
   FetchRes,
+  FsOpenWatcher,
+  FsPollWatcher,
+  FsPollWatcherRes,
   FormatError,
   FormatErrorRes,
   GetRandomValues,
@@ -129,6 +132,9 @@ enum ErrorKind: byte {
   HttpParse,
   HttpOther,
   TooLarge,
+
+  // notify errors
+  FsWatcherError,
 
   // custom errors
   InvalidUri,
@@ -325,6 +331,35 @@ table Fetch {
 table FetchRes {
   header: HttpHeader;
   body_rid: uint32;
+}
+
+enum FsWatcherEvent: byte {
+  WatcherClosed = 0,
+  // The rest come from the notify crate:
+  NoticeWrite,
+  NoticeRemove,
+  Create,
+  Write,
+  Chmod,
+  Remove,
+  Rename,
+  Rescan,
+}
+
+table FsOpenWatcher {
+  debounce_ms: uint32;
+  recursive: bool;
+  paths: [string];
+}
+
+table FsPollWatcher {
+  rid: uint32;
+}
+
+table FsPollWatcherRes {
+  event: FsWatcherEvent;
+  source: string;
+  destination: string; // Only for rename event
 }
 
 table MakeTempDir {

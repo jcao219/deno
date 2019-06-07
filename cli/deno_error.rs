@@ -176,6 +176,25 @@ impl From<url::ParseError> for DenoError {
   }
 }
 
+impl From<notify::Error> for DenoError {
+  #[inline]
+  fn from(err: notify::Error) -> Self {
+    Self {
+      repr: match err {
+        notify::Error::Io(e) => Repr::IoErr(e),
+        notify::Error::Generic(message) => {
+          Repr::Simple(ErrorKind::FsWatcherError, message)
+        }
+        notify::Error::PathNotFound => Repr::IoErr(io::Error::new(
+          io::ErrorKind::NotFound,
+          "watched path not found",
+        )),
+        notify::Error::WatchNotFound => unreachable!(), // we never manually remove watched paths
+      },
+    }
+  }
+}
+
 impl From<hyper::Error> for DenoError {
   #[inline]
   fn from(err: hyper::Error) -> Self {

@@ -13,6 +13,7 @@ use crate::fs as deno_fs;
 use crate::http_util;
 use crate::msg;
 use crate::msg_util;
+use crate::notify;
 use crate::rand;
 use crate::repl;
 use crate::resolve_addr::resolve_addr;
@@ -50,10 +51,12 @@ use std::fs;
 use std::net::Shutdown;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::mpsc::channel;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 use tokio;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
+use tokio_executor::DefaultExecutor;
 use tokio_process::CommandExt;
 use tokio_threadpool;
 use utime;
@@ -205,6 +208,8 @@ pub fn op_selector_std(inner_type: msg::Any) -> Option<CliDispatchFn> {
     msg::Any::Exit => Some(op_exit),
     msg::Any::Fetch => Some(op_fetch),
     msg::Any::FetchModuleMetaData => Some(op_fetch_module_meta_data),
+    msg::Any::FsOpenWatcher => Some(op_fs_open_watcher),
+    msg::Any::FsPollWatcher => Some(op_fs_poll_watcher),
     msg::Any::FormatError => Some(op_format_error),
     msg::Any::GetRandomValues => Some(op_get_random_values),
     msg::Any::GlobalTimer => Some(op_global_timer),
@@ -763,6 +768,140 @@ fn op_fetch(
   }
 }
 
+fn op_fs_open_watcher(
+  state: &ThreadSafeState,
+  base: &msg::Base<'_>,
+  _data: Option<PinnedBuf>,
+) -> CliOpResult {
+  if !base.sync() {
+    return Err(deno_error::no_async_support());
+  }
+  use notify::{watcher, DebouncedEvent, RecursiveMode, Watcher};
+  let inner = base.inner_as_fs_open_watcher().unwrap();
+
+  let debounce_ms = inner.debounce_ms();
+  let (tx, rx) = channel::<DebouncedEvent>();
+  let mut watcher = watcher(tx, Duration::from_millis(debounce_ms.into()))?;
+
+  let recursive_mode: RecursiveMode = if inner.recursive() {
+    RecursiveMode::Recursive
+  } else {
+    RecursiveMode::NonRecursive
+  };
+  let paths = inner.paths().unwrap();
+  for i in 0..paths.len() {
+    let path = paths.get(i);
+    state.check_read(path)?;
+    watcher.watch(path, recursive_mode)?;
+  }
+
+  let resource = resources::add_fs_watcher(watcher, rx);
+  let builder = &mut FlatBufferBuilder::new();
+  let inner =
+    msg::OpenRes::create(builder, &msg::OpenResArgs { rid: resource.rid });
+  ok_buf(serialize_response(
+    base.cmd_id(),
+    builder,
+    msg::BaseArgs {
+      inner: Some(inner.as_union_value()),
+      inner_type: msg::Any::OpenRes,
+      ..Default::default()
+    },
+  ))
+}
+
+fn op_fs_poll_watcher(
+  _state: &ThreadSafeState,
+  base: &msg::Base<'_>,
+  _data: Option<PinnedBuf>,
+) -> CliOpResult {
+  if base.sync() {
+    return Err(deno_error::no_sync_support());
+  }
+  let inner = base.inner_as_fs_poll_watcher().unwrap();
+  let rid = inner.rid();
+  let cmd_id = base.cmd_id();
+  blocking(base.sync(), move || {
+    let maybe_event: Result<
+      notify::DebouncedEvent,
+      std::sync::mpsc::RecvError,
+    > = {
+      // If there's an error in this block, it probably means the watcher was closed.
+      let rx_mutex = resources::get_receiver_for_fs_watcher(rid)?;
+      let rx = rx_mutex.lock().unwrap();
+      rx.recv() // blocks
+    };
+    let (event_type, src_path, dest_path): (
+      msg::FsWatcherEvent,
+      Option<String>,
+      Option<String>,
+    ) = match maybe_event {
+      Ok(event) => match event {
+        notify::DebouncedEvent::Chmod(path) => (
+          msg::FsWatcherEvent::Chmod,
+          Some(path.to_string_lossy().into_owned()),
+          None,
+        ),
+        notify::DebouncedEvent::Create(path) => (
+          msg::FsWatcherEvent::Create,
+          Some(path.to_string_lossy().into_owned()),
+          None,
+        ),
+        notify::DebouncedEvent::Error(e, _) => return Err(DenoError::from(e)),
+        notify::DebouncedEvent::NoticeRemove(path) => (
+          msg::FsWatcherEvent::NoticeRemove,
+          Some(path.to_string_lossy().into_owned()),
+          None,
+        ),
+        notify::DebouncedEvent::NoticeWrite(path) => (
+          msg::FsWatcherEvent::NoticeWrite,
+          Some(path.to_string_lossy().into_owned()),
+          None,
+        ),
+        notify::DebouncedEvent::Remove(path) => (
+          msg::FsWatcherEvent::Remove,
+          Some(path.to_string_lossy().into_owned()),
+          None,
+        ),
+        notify::DebouncedEvent::Rename(src, dest) => (
+          msg::FsWatcherEvent::Rename,
+          Some(src.to_string_lossy().into_owned()),
+          Some(dest.to_string_lossy().into_owned()),
+        ),
+        notify::DebouncedEvent::Rescan => {
+          (msg::FsWatcherEvent::Rescan, None, None)
+        }
+        notify::DebouncedEvent::Write(path) => (
+          msg::FsWatcherEvent::Write,
+          Some(path.to_string_lossy().into_owned()),
+          None,
+        ),
+      },
+      Err(_) => (msg::FsWatcherEvent::WatcherClosed, None, None),
+    };
+    let builder = &mut FlatBufferBuilder::new();
+    let source = src_path.map(|path| builder.create_string(&path));
+    let destination = dest_path.map(|path| builder.create_string(&path));
+    let inner = msg::FsPollWatcherRes::create(
+      builder,
+      &msg::FsPollWatcherResArgs {
+        event: event_type,
+        source: source,
+        destination: destination,
+      },
+    );
+    Ok(serialize_response(
+      cmd_id,
+      builder,
+      msg::BaseArgs {
+        inner: Some(inner.as_union_value()),
+        inner_type: msg::Any::FsPollWatcherRes,
+        ..Default::default()
+      },
+    ))
+  })
+}
+
 // This is just type conversion. Implement From trait?
 // See https://github.com/tokio-rs/tokio/blob/ffd73a64e7ec497622b7f939e38017afe7124dc4/tokio-fs/src/lib.rs#L76-L85
 fn convert_blocking<F>(f: F) -> Poll<Buf, DenoError>
@@ -786,9 +925,10 @@ where
     let result_buf = f()?;
     Ok(Op::Sync(result_buf))
   } else {
-    Ok(Op::Async(Box::new(tokio_util::poll_fn(move || {
-      convert_blocking(f)
-    }))))
+    Ok(Op::Async(Box::new(futures::sync::oneshot::spawn(
+      tokio_util::poll_fn(move || convert_blocking(f)),
+      &DefaultExecutor::current(),
+    ))))
   }
 }
 

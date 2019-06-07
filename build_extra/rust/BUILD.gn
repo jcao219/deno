@@ -263,10 +263,19 @@ rust_rlib("either") {
     "default",
     "use_std",
   ]
+}
+
+rust_rlib("filetime") {
+  edition = "2015"
+  source_root = "$cargo_home/registry/src/github.com-1ecc6299db9ec823/filetime-0.2.5/src/lib.rs"
+  extern_rlib = [ "cfg_if" ]
   args = [
     "--cap-lints",
     "allow",
   ]
+  if (is_posix) {
+    extern_rlib += [ "libc" ]
+  }
 }
 
 rust_rlib("flatbuffers") {
@@ -535,6 +544,11 @@ rust_rlib("lazy_static") {
   ]
 }
 
+rust_rlib("lazycell") {
+  edition = "2015"
+  source_root = "$cargo_home/registry/src/github.com-1ecc6299db9ec823/lazycell-1.2.1/src/lib.rs"
+}
+
 rust_rlib("libc") {
   edition = "2015"
   source_root = "$cargo_home/registry/src/github.com-1ecc6299db9ec823/libc-0.2.58/src/lib.rs"
@@ -663,6 +677,21 @@ rust_rlib("mio") {
   }
 }
 
+rust_rlib("mio_extras") {
+  edition = "2015"
+  source_root = "$cargo_home/registry/src/github.com-1ecc6299db9ec823/mio-extras-2.0.5/src/lib.rs"
+  extern_rlib = [
+    "mio",
+    "log",
+    "lazycell",
+    "slab",
+  ]
+  args = [
+    "--cap-lints",
+    "allow",
+  ]
+}
+
 rust_rlib("net2") {
   edition = "2015"
   source_root = "$cargo_home/registry/src/github.com-1ecc6299db9ec823/net2-0.2.33/src/lib.rs"
@@ -690,6 +719,28 @@ rust_rlib("nodrop") {
     "--cap-lints",
     "allow",
   ]
+}
+
+rust_rlib("notify") {
+  edition = "2015"
+  source_root = "$cargo_home/registry/src/github.com-1ecc6299db9ec823/notify-4.0.12/src/lib.rs"
+  extern_rlib = [
+    "bitflags",
+    "filetime",
+    "libc",
+    "walkdir",
+  ]
+  args = [
+    "--cap-lints",
+    "allow",
+  ]
+  if (is_posix) {
+    extern_rlib += [
+      "inotify",
+      "mio",
+      "mio_extras",
+    ]
+  }
 }
 
 rust_rlib("num_cpus") {
@@ -1238,6 +1289,18 @@ rust_rlib("ryu") {
     "integer128",
     "must_use_return",
   ]
+}
+
+rust_rlib("same_file") {
+  edition = "2015"
+  source_root = "$cargo_home/registry/src/github.com-1ecc6299db9ec823/same-file-1.0.4/src/lib.rs"
+  args = [
+    "--cap-lints",
+    "allow",
+  ]
+  if (is_win) {
+    extern_rlib = [ "winapi_util" ]
+  }
 }
 
 rust_rlib("scopeguard") {
@@ -1965,6 +2028,22 @@ rust_rlib("vlq") {
   ]
 }
 
+rust_rlib("walkdir") {
+  edition = "2015"
+  source_root = "$cargo_home/registry/src/github.com-1ecc6299db9ec823/walkdir-2.2.7/src/lib.rs"
+  extern_rlib = [ "same_file" ]
+  args = [
+    "--cap-lints",
+    "allow",
+  ]
+  if (is_win) {
+    extern_rlib += [
+      "winapi",
+      "winapi_util",
+    ]
+  }
+}
+
 rust_rlib("want") {
   edition = "2015"
   source_root = "$cargo_home/registry/src/github.com-1ecc6299db9ec823/want-0.0.6/src/lib.rs"
@@ -2072,6 +2151,30 @@ if (is_posix) {
   rust_rlib("arc_swap") {
     edition = "2015"
     source_root = "$cargo_home/registry/src/github.com-1ecc6299db9ec823/arc-swap-0.3.11/src/lib.rs"
+    args = [
+      "--cap-lints",
+      "allow",
+    ]
+  }
+
+  rust_rlib("inotify") {
+    edition = "2015"
+    source_root = "$cargo_home/registry/src/github.com-1ecc6299db9ec823/inotify-0.6.1/src/lib.rs"
+    extern_rlib = [
+      "bitflags",
+      "inotify_sys",
+      "libc",
+    ]
+    args = [
+      "--cap-lints",
+      "allow",
+    ]
+  }
+
+  rust_rlib("inotify_sys") {
+    edition = "2015"
+    source_root = "$cargo_home/registry/src/github.com-1ecc6299db9ec823/inotify-sys-0.1.3/src/lib.rs"
+    extern_rlib = [ "libc" ]
     args = [
       "--cap-lints",
       "allow",
@@ -2350,6 +2453,16 @@ if (is_win) {
       "user32.lib",
       "winspool.lib",
       "ws2_32.lib",
+    ]
+  }
+
+  rust_rlib("winapi_util") {
+    edition = "2015"
+    source_root = "$cargo_home/registry/src/github.com-1ecc6299db9ec823/winapi-util-0.1.2/src/lib.rs"
+    extern = [ ":winapi" ]
+    args = [
+      "--cap-lints",
+      "allow",
     ]
   }
 

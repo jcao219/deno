@@ -12,6 +12,7 @@ extern crate deno;
 extern crate indexmap;
 #[cfg(unix)]
 extern crate nix;
+extern crate notify;
 extern crate rand;
 
 mod ansi;
