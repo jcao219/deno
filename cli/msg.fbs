@@ -19,6 +19,9 @@ union Any {
   FetchSourceFile,
   FetchSourceFileRes,
   FetchRes,
+  FsOpenWatcher,
+  FsPollWatcher,
+  FsPollWatcherRes,
   FormatError,
   FormatErrorRes,
   GetRandomValues,
@@ -132,6 +135,9 @@ enum ErrorKind: byte {
   HttpParse,
   HttpOther,
   TooLarge,
+
+  // notify errors
+  FsWatcherError,
 
   // custom errors
   InvalidUri,
@@ -338,6 +344,57 @@ table Fetch {
 table FetchRes {
   header: HttpHeader;
   body_rid: uint32;
+}
+
+enum FsWatcherEvent: byte {
+  Unknown = 0,
+  Accessed,
+  Created,
+  MetadataChanged,
+  Modified,
+  Removed,
+  Renamed,
+  WatcherClosed,
+}
+
+enum FsWatcherEventDetail: byte {
+  Unknown = 0,
+  File,
+  Folder,
+  Data,
+  DataContent,
+  DataSize,
+  AccessTime,
+  Extended,
+  Ownership,
+  Permissions,
+  WriteTime,
+  Read,
+  Closed,
+  ClosedExecute,
+  ClosedRead,
+  ClosedWrite,
+  Opened,
+  OpenedExecute,
+  OpenedRead,
+  OpenedWrite,
+}
+
+table FsOpenWatcher {
+  debounce_ms: uint32;
+  recursive: bool;
+  paths: [string];
+}
+
+table FsPollWatcher {
+  rid: uint32;
+}
+
+table FsPollWatcherRes {
+  event: FsWatcherEvent;
+  detail: FsWatcherEventDetail;
+  source: string;
+  destination: string; // Only for rename event
 }
 
 table MakeTempDir {

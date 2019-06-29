@@ -39,6 +39,8 @@ use tokio_process;
 
 pub type ResourceId = u32; // Sometimes referred to RID.
 
+type FsEventReceiver = crossbeam_channel::Receiver<notify::Result<notify::event::Event>>;
+
 // These store Deno's file descriptors. These are not necessarily the operating
 // system ones.
 type ResourceTable = HashMap<ResourceId, Repr>;
@@ -82,6 +84,10 @@ enum Repr {
   Stdout(tokio::fs::File),
   Stderr(tokio::io::Stderr),
   FsFile(tokio::fs::File),
+  FsWatcher(
+    notify::RecommendedWatcher,
+    Arc<Mutex<FsEventReceiver>>,
+  ),
   // Since TcpListener might be closed while there is a pending accept task,
   // we need to track the task so that when the listener is closed,
   // this pending task could be notified and die.
@@ -132,6 +138,7 @@ fn inspect_repr(repr: &Repr) -> String {
     Repr::Stdout(_) => "stdout",
     Repr::Stderr(_) => "stderr",
     Repr::FsFile(_) => "fsFile",
+    Repr::FsWatcher(_, _) => "fsWatcher",
     Repr::TcpListener(_, _) => "tcpListener",
     Repr::TcpStream(_) => "tcpStream",
     Repr::HttpBody(_) => "httpBody",
@@ -300,6 +307,23 @@ pub fn add_fs_file(fs_file: tokio::fs::File) -> Resource {
     None => Resource { rid },
   }
 }
+pub struct WatcherEvent {
+  pub rid: ResourceId,
+}
+
+pub fn add_fs_watcher(
+  fs_watcher: notify::RecommendedWatcher,
+  receiver: FsEventReceiver,
+) -> Resource {
+  let rid = new_rid();
+  let mut tg = RESOURCE_TABLE.lock().unwrap();
+  let r = tg.insert(
+    rid,
+    Repr::FsWatcher(fs_watcher, Arc::new(Mutex::new(receiver))),
+  );
+  assert!(r.is_none());
+  Resource { rid }
+}
 
 pub fn add_tcp_listener(listener: tokio::net::TcpListener) -> Resource {
   let rid = new_rid();
@@ -400,6 +424,17 @@ impl Stream for WorkerReceiverStream {
   }
 }
 
+pub fn get_receiver_for_fs_watcher(
+  rid: ResourceId,
+) -> DenoResult<Arc<Mutex<FsEventReceiver>>> {
+  let table = RESOURCE_TABLE.lock().unwrap();
+  let maybe_repr = table.get(&rid);
+  match maybe_repr {
+    Some(Repr::FsWatcher(_, rx_ref)) => Ok(rx_ref.clone()),
+    _ => Err(bad_resource()),
+  }
+}
+
 pub fn get_message_stream_from_worker(rid: ResourceId) -> WorkerReceiverStream {
   WorkerReceiverStream { rid }
 }
@@ -462,6 +497,7 @@ impl Future for ChildStatus {
   fn poll(&mut self) -> Poll<ExitStatus, ErrBox> {
     let mut table = RESOURCE_TABLE.lock().unwrap();
     let maybe_repr = table.get_mut(&self.rid);
+
     match maybe_repr {
       Some(Repr::Child(ref mut child)) => child.poll().map_err(ErrBox::from),
       _ => Err(bad_resource()),

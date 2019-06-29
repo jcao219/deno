@@ -11,6 +11,7 @@ use crate::fs as deno_fs;
 use crate::http_util;
 use crate::msg;
 use crate::msg_util;
+use crate::notify;
 use crate::rand;
 use crate::repl;
 use crate::resolve_addr::resolve_addr;
@@ -215,6 +216,8 @@ pub fn op_selector_std(inner_type: msg::Any) -> Option<CliDispatchFn> {
     msg::Any::Exit => Some(op_exit),
     msg::Any::Fetch => Some(op_fetch),
     msg::Any::FetchSourceFile => Some(op_fetch_source_file),
+    msg::Any::FsOpenWatcher => Some(op_fs_open_watcher),
+    msg::Any::FsPollWatcher => Some(op_fs_poll_watcher),
     msg::Any::FormatError => Some(op_format_error),
     msg::Any::GetRandomValues => Some(op_get_random_values),
     msg::Any::GlobalTimer => Some(op_global_timer),
@@ -797,6 +800,157 @@ fn op_fetch(
   } else {
     Ok(Op::Async(Box::new(future)))
   }
+}
+
+fn op_fs_open_watcher(
+  state: &ThreadSafeState,
+  base: &msg::Base<'_>,
+  _data: Option<PinnedBuf>,
+) -> CliOpResult {
+  if !base.sync() {
+    return Err(deno_error::no_async_support());
+  }
+  use notify::{Watcher, RecommendedWatcher, RecursiveMode};
+  use crossbeam_channel::unbounded;
+  let inner = base.inner_as_fs_open_watcher().unwrap();
+
+  let _debounce_ms = inner.debounce_ms();
+  let (tx, rx) = unbounded();
+  let mut watcher: RecommendedWatcher = Watcher::new_immediate(tx)?;
+
+  let recursive_mode: RecursiveMode = if inner.recursive() {
+    RecursiveMode::Recursive
+  } else {
+    RecursiveMode::NonRecursive
+  };
+  let paths = inner.paths().unwrap();
+  for i in 0..paths.len() {
+    let path = paths.get(i);
+    state.check_read(path)?;
+    watcher.watch(path, recursive_mode)?;
+  }
+
+  let resource = resources::add_fs_watcher(watcher, rx);
+  let builder = &mut FlatBufferBuilder::new();
+  let inner =
+    msg::OpenRes::create(builder, &msg::OpenResArgs { rid: resource.rid });
+  ok_buf(serialize_response(
+    base.cmd_id(),
+    builder,
+    msg::BaseArgs {
+      inner: Some(inner.as_union_value()),
+      inner_type: msg::Any::OpenRes,
+      ..Default::default()
+    },
+  ))
+}
+
+fn op_fs_poll_watcher(
+  _state: &ThreadSafeState,
+  base: &msg::Base<'_>,
+  _data: Option<PinnedBuf>,
+) -> CliOpResult {
+  if base.sync() {
+    return Err(deno_error::no_sync_support());
+  }
+  let inner = base.inner_as_fs_poll_watcher().unwrap();
+  let rid = inner.rid();
+  let cmd_id = base.cmd_id();
+  blocking(base.sync(), move || {
+    let maybe_event: Result<
+      notify::Result<notify::event::Event>,
+      crossbeam_channel::RecvError,
+    > = {
+      let rx_mutex = resources::get_receiver_for_fs_watcher(rid)?;
+      let rx = rx_mutex.lock().unwrap();
+      rx.recv() // blocks. if RecvError, then watcher was closed.
+    };
+    use notify::event::{EventKind, AccessKind, AccessMode, CreateKind,
+                        ModifyKind, RemoveKind, DataChange, MetadataKind};
+    use msg::FsWatcherEvent::{*, self as Event};
+    use msg::FsWatcherEventDetail::{*, self as EventDetail};
+    // Order the patterns from least-variant/least-nested pattern to most.
+    let (event_type, event_subtype): (Option<Event>, Option<EventDetail>) = 
+      match maybe_event {
+        Err(_ /* RecvError */) => (Some(WatcherClosed), None),
+        Ok(Err(notify_error)) => return Err(DenoError::from(notify_error)),
+        Ok(Ok(ref event)) => match &event.kind {
+          EventKind::Any | EventKind::Other => (None, None),
+          EventKind::Create(create_kind) => (Some(Created), match create_kind {
+            CreateKind::File => Some(File),
+            CreateKind::Folder => Some(Folder),
+            CreateKind::Any | CreateKind::Other => None,
+          }),
+          EventKind::Remove(remove_kind) => (Some(Removed), match remove_kind {
+            RemoveKind::File => Some(File),
+            RemoveKind::Folder => Some(Folder),
+            RemoveKind::Any | RemoveKind::Other => None,
+          }),
+          EventKind::Modify(modify_kind) => match modify_kind {
+            ModifyKind::Name(_) => (Some(Renamed), None),
+            ModifyKind::Any | ModifyKind::Other => (Some(Modified), None),
+            ModifyKind::Data(data_change) => match data_change {
+              DataChange::Any | DataChange::Other => (Some(Modified), Some(Data)),
+              DataChange::Content => (Some(Modified), Some(DataContent)),
+              DataChange::Size => (Some(Modified), Some(DataSize)),
+            },
+            ModifyKind::Metadata(metadata_kind) => (Some(MetadataChanged), match metadata_kind {
+              MetadataKind::Any | MetadataKind::Other => None,
+              MetadataKind::AccessTime => Some(AccessTime),
+              MetadataKind::Extended => Some(Extended),
+              MetadataKind::Ownership => Some(Ownership),
+              MetadataKind::Permissions => Some(Permissions),
+              MetadataKind::WriteTime => Some(WriteTime),
+            }),
+          },
+          EventKind::Access(access_kind) => (Some(Accessed), match access_kind {
+            AccessKind::Read => Some(Read),
+            AccessKind::Any | AccessKind::Other => None,
+            AccessKind::Close(mode) => match mode {
+              AccessMode::Any | AccessMode::Other => Some(Closed),
+              AccessMode::Execute => Some(ClosedExecute),
+              AccessMode::Read => Some(ClosedRead),
+              AccessMode::Write => Some(ClosedWrite),
+            },
+            AccessKind::Open(mode) => match mode {
+              AccessMode::Any | AccessMode::Other => Some(Opened),
+              AccessMode::Execute => Some(OpenedExecute),
+              AccessMode::Read => Some(OpenedRead),
+              AccessMode::Write => Some(OpenedWrite),
+            },
+          }),
+        },
+      };
+    let builder = &mut FlatBufferBuilder::new();
+    let (source, destination) = match maybe_event {
+      Ok(Ok(ref event)) => match event.paths.as_slice() {
+        [source, destination] => (Some(source), Some(destination)),
+        [source] => (Some(source), None),
+        _ => (None, None),
+      }
+      _ => (None, None),
+    };
+    let source = source.map(|path| builder.create_string(&path.to_string_lossy()));
+    let destination = destination.map(|path| builder.create_string(&path.to_string_lossy()));
+    let inner = msg::FsPollWatcherRes::create(
+      builder,
+      &msg::FsPollWatcherResArgs {
+        event: event_type.unwrap_or(msg::FsWatcherEvent::Unknown),
+        detail: event_subtype.unwrap_or(msg::FsWatcherEventDetail::Unknown),
+        source: source,
+        destination: destination,
+      },
+    );
+    Ok(serialize_response(
+      cmd_id,
+      builder,
+      msg::BaseArgs {
+        inner: Some(inner.as_union_value()),
+        inner_type: msg::Any::FsPollWatcherRes,
+        ..Default::default()
+      },
+    ))
+  })
 }
 
 // This is just type conversion. Implement From trait?

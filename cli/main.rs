@@ -1,4 +1,5 @@
 // Copyright 2018-2019 the Deno authors. All rights reserved. MIT license.
+extern crate crossbeam_channel;
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
@@ -12,6 +13,7 @@ extern crate deno;
 extern crate indexmap;
 #[cfg(unix)]
 extern crate nix;
+extern crate notify;
 extern crate rand;
 extern crate url;
 

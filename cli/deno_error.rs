@@ -95,6 +95,26 @@ impl GetErrorKind for StaticError {
   }
 }
 
+impl GetErrorKind for notify::Error {
+  fn kind(&self) -> ErrorKind {
+    Self {
+      // TODO: include path info too?
+      repr: match err.kind {
+        notify::ErrorKind::Io(e) => e.kind()
+        notify::ErrorKind::Generic(message) => {
+          Repr::Simple(ErrorKind::FsWatcherError, message)
+        }
+        notify::ErrorKind::PathNotFound => Repr::IoErr(io::Error::new(
+          io::ErrorKind::NotFound,
+          "watched path not found",
+        )),
+        notify::ErrorKind::InvalidConfig(_) => unreachable!(),
+        notify::ErrorKind::WatchNotFound => unreachable!(), // we never manually remove watched paths
+      },
+    }
+  }
+}
+
 impl GetErrorKind for JSError {
   fn kind(&self) -> ErrorKind {
     ErrorKind::JSError
@@ -251,6 +271,7 @@ impl GetErrorKind for dyn AnyError {
       .or_else(|| self.downcast_ref::<uri::InvalidUri>().map(Get::kind))
       .or_else(|| self.downcast_ref::<url::ParseError>().map(Get::kind))
       .or_else(|| self.downcast_ref::<ReadlineError>().map(Get::kind))
+      .or_else(|| self.downcast_ref::<notify::Error>().map(Get::kind))
       .or_else(|| unix_error_kind(self))
       .unwrap_or_else(|| {
         panic!("Can't get ErrorKind for {:?}", self);
