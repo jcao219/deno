@@ -237,6 +237,18 @@ impl GetErrorKind for serde_json::error::Error {
   }
 }
 
+impl GetErrorKind for notify::Error {
+  fn kind(&self) -> ErrorKind {
+    // TODO: include path info too?
+    match self {
+      notify::Error::Io(e) => GetErrorKind::kind(e),
+      notify::Error::Generic(_message) => ErrorKind::FsWatcherError,
+      notify::Error::PathNotFound => ErrorKind::NotFound,
+      notify::Error::WatchNotFound => unreachable!(), // we never manually remove watched paths
+    }
+  }
+}
+
 #[cfg(unix)]
 mod unix {
   use super::{ErrorKind, GetErrorKind};
@@ -284,6 +296,7 @@ impl GetErrorKind for dyn AnyError {
       .or_else(|| self.downcast_ref::<uri::InvalidUri>().map(Get::kind))
       .or_else(|| self.downcast_ref::<url::ParseError>().map(Get::kind))
       .or_else(|| self.downcast_ref::<ReadlineError>().map(Get::kind))
+      .or_else(|| self.downcast_ref::<notify::Error>().map(Get::kind))
       .or_else(|| {
         self
           .downcast_ref::<serde_json::error::Error>()

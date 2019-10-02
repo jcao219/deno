@@ -1028,6 +1028,20 @@ declare namespace Deno {
    */
   export function resources(): ResourceMap;
 
+  // @url js/watch_fs.d.ts
+
+  export type FsWatcher = AsyncIterableIterator<unknown> & Closer;
+
+  export interface WatchOptions {
+    recursive?: boolean;
+    debounceMs?: number;
+  }
+
+  export function watch(
+    paths: string | string[],
+    options?: WatchOptions,
+  ): FsWatcher;
+
   // @url js/process.d.ts
 
   /** How to handle subprocess stdio.

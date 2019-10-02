@@ -9,6 +9,7 @@ mod errors;
 mod fetch;
 mod files;
 mod fs;
+mod fs_watcher;
 mod io;
 mod metrics;
 mod net;
@@ -81,6 +82,8 @@ pub const OP_TRUNCATE: OpId = 54;
 pub const OP_MAKE_TEMP_DIR: OpId = 55;
 pub const OP_CWD: OpId = 56;
 pub const OP_FETCH_ASSET: OpId = 57;
+pub const OP_FS_OPEN_WATCHER: OpId = 58;
+pub const OP_FS_POLL_WATCHER: OpId = 59;
 
 pub fn dispatch(
   state: &ThreadSafeState,
@@ -299,6 +302,12 @@ pub fn dispatch(
       state,
       control,
       zero_copy,
+    ),
+    OP_FS_OPEN_WATCHER => dispatch_json::dispatch(
+      fs_watcher::op_fs_open_watcher, state, control, zero_copy
+    ),
+    OP_FS_POLL_WATCHER => dispatch_json::dispatch(
+      fs_watcher::op_fs_poll_watcher, state, control, zero_copy
     ),
     _ => panic!("bad op_id"),
   };

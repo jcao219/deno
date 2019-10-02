@@ -85,6 +85,11 @@ export {
   ProcessStatus,
   Signal
 } from "./process.ts";
+export {
+  watch,
+  FsWatcher,
+  WatchOptions,
+} from "./watch_fs.ts";
 export { inspect, customInspect } from "./console.ts";
 export { build, OperatingSystem, Arch } from "./build.ts";
 export { version } from "./version.ts";

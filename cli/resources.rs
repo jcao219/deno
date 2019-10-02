@@ -43,6 +43,8 @@ pub type ResourceId = u32; // Sometimes referred to RID.
 // system ones.
 type ResourceTable = BTreeMap<ResourceId, Repr>;
 
+type FsEventReceiver = std::sync::mpsc::Receiver<notify::DebouncedEvent>;
+
 #[cfg(not(windows))]
 use std::os::unix::io::FromRawFd;
 
@@ -82,6 +84,7 @@ enum Repr {
   Stdout(tokio::fs::File),
   Stderr(tokio::io::Stderr),
   FsFile(tokio::fs::File),
+  FsWatcher(notify::RecommendedWatcher, Arc<Mutex<FsEventReceiver>>),
   // Since TcpListener might be closed while there is a pending accept task,
   // we need to track the task so that when the listener is closed,
   // this pending task could be notified and die.
@@ -132,6 +135,7 @@ fn inspect_repr(repr: &Repr) -> String {
     Repr::Stdout(_) => "stdout",
     Repr::Stderr(_) => "stderr",
     Repr::FsFile(_) => "fsFile",
+    Repr::FsWatcher(_, _) => "fsWatcher",
     Repr::TcpListener(_, _) => "tcpListener",
     Repr::TcpStream(_) => "tcpStream",
     Repr::HttpBody(_) => "httpBody",
@@ -355,6 +359,31 @@ pub fn add_worker(wc: WorkerChannels) -> Resource {
   let r = tg.insert(rid, Repr::Worker(wc));
   assert!(r.is_none());
   Resource { rid }
+}
+
+pub fn add_fs_watcher(
+  fs_watcher: notify::RecommendedWatcher,
+  receiver: FsEventReceiver,
+) -> Resource {
+  let rid = new_rid();
+  let mut tg = RESOURCE_TABLE.lock().unwrap();
+  let r = tg.insert(
+    rid,
+    Repr::FsWatcher(fs_watcher, Arc::new(Mutex::new(receiver))),
+  );
+  assert!(r.is_none());
+  Resource { rid }
+}
+
+pub fn get_receiver_for_fs_watcher(
+  rid: ResourceId,
+) -> Arc<Mutex<FsEventReceiver>> {
+  let table = RESOURCE_TABLE.lock().unwrap();
+  let maybe_repr = table.get(&rid);
+  match maybe_repr {
+    Some(Repr::FsWatcher(_, rx_ref)) => rx_ref.clone(),
+    _ => panic!("bad resource"),
+  }
 }
 
 /// Post message to worker as a host or privilged overlord
