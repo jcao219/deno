@@ -86,9 +86,10 @@ export {
   Signal
 } from "./process.ts";
 export {
-  watch,
   FsWatcher,
+  FsWatcherEvent,
   WatchOptions,
+  watch,
 } from "./watch_fs.ts";
 export { inspect, customInspect } from "./console.ts";
 export { build, OperatingSystem, Arch } from "./build.ts";

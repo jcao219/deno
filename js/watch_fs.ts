@@ -3,7 +3,13 @@ import { sendSync, sendAsync } from "./dispatch_json.ts";
 import * as dispatch from "./dispatch.ts";
 import { Closer } from "./io.ts";
 
-export type FsWatcher = AsyncIterableIterator<unknown> & Closer;
+export interface FsWatcherEvent {
+  event: string;
+  source?: string;
+  destination?: string;
+}
+
+export type FsWatcher = AsyncIterableIterator<FsWatcherEvent> & Closer;
 
 export interface WatchOptions {
     recursive?: boolean;
@@ -12,23 +18,29 @@ export interface WatchOptions {
 
 class FsWatcherImpl implements FsWatcher {
   readonly rid: number;
+  private closed: boolean = false;
 
   constructor(paths: string[], options: WatchOptions) {
     const { recursive = false, debounceMs = 500 } = options;
     this.rid = sendSync(dispatch.OP_FS_OPEN_WATCHER, { recursive, paths, debounceMs });
   }
 
-  async next(): Promise<IteratorResult<unknown>> {
-    const res = await sendAsync(dispatch.OP_FS_POLL_WATCHER, { rid: this.rid });
-    return { value: res, done: false };
-    // return { value: event, done: event.eventType === "watcherClosed" };
+  async next(): Promise<IteratorResult<FsWatcherEvent>> {
+    if (this.closed) {
+      return { value: undefined, done: true };
+    }
+    const res: FsWatcherEvent = await sendAsync(dispatch.OP_FS_POLL_WATCHER, { rid: this.rid });
+    return { value: res, done: res.event === "watcherClosed" };
   }
 
   close(): void {
-    sendSync(dispatch.OP_CLOSE, { rid: this.rid });
+    if (!this.closed) {
+      sendSync(dispatch.OP_CLOSE, { rid: this.rid });
+    }
+    this.closed = true;
   }
 
-  [Symbol.asyncIterator](): AsyncIterableIterator<unknown> {
+  [Symbol.asyncIterator](): AsyncIterableIterator<FsWatcherEvent> {
     return this;
   }
 }
